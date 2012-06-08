@@ -113,6 +113,7 @@ public class NotificationManagerService extends INotificationManager.Stub
     private LightsService.Light mBatteryLight;
     private LightsService.Light mNotificationLight;
     private LightsService.Light mAttentionLight;
+    private LightsService.Light mButtonLight;
 
     private int mDefaultNotificationColor;
     private int mDefaultNotificationLedOn;
@@ -176,6 +177,7 @@ public class NotificationManagerService extends INotificationManager.Stub
     private boolean mNotificationAlwaysOnEnabled;
     private boolean mNotificationChargingEnabled;
     private boolean mGreenLightOn = false;
+    private boolean mButtonLightEnabled;
 
     // for adb connected notifications
     private boolean mUsbConnected = false;
@@ -206,6 +208,7 @@ public class NotificationManagerService extends INotificationManager.Stub
     private boolean mQuietHoursStill = true;
     // Dim LED if hardware supports it.
     private boolean mQuietHoursDim = true;
+    private boolean mQuietHoursBln = true;
 
     private static final int BATTERY_LOW_ARGB = 0xFFFF0000; // Charging Low - red solid on
     private static final int BATTERY_MEDIUM_ARGB = 0xFFFFFF00;    // Charging - orange solid on
@@ -549,7 +552,7 @@ public class NotificationManagerService extends INotificationManager.Stub
                     Settings.System.NOTIFICATION_LIGHT_BLINK), false, this);
             resolver.registerContentObserver(Settings.System.getUriFor(
                     Settings.System.NOTIFICATION_LIGHT_ALWAYS_ON), false, this);
-            resolver.registerContentObserver(Settings.System.getUriFor(
+	    resolver.registerContentObserver(Settings.System.getUriFor(
                     Settings.System.NOTIFICATION_LIGHT_CHARGING), false, this);
             resolver.registerContentObserver(Settings.System.getUriFor(
                     Settings.System.QUIET_HOURS_ENABLED), false, this);
@@ -563,6 +566,8 @@ public class NotificationManagerService extends INotificationManager.Stub
                     Settings.System.QUIET_HOURS_STILL), false, this);
             resolver.registerContentObserver(Settings.System.getUriFor(
                     Settings.System.QUIET_HOURS_DIM), false, this);
+	    resolver.registerContentObserver(Settings.System.getUriFor(
+		    Settings.System.QUIET_HOURS_BLN), false, this);
             update();
         }
 
@@ -609,6 +614,8 @@ public class NotificationManagerService extends INotificationManager.Stub
                     Settings.System.QUIET_HOURS_STILL, 0) != 0;
             mQuietHoursDim = Settings.System.getInt(resolver,
                     Settings.System.QUIET_HOURS_DIM, 0) != 0;
+	    mQuietHoursBln = Settings.System.getInt(resolver,
+		    Settings.System.QUIET_HOURS_BLN, 0) != 0;
 
             mVibrateInCall = Settings.System.getInt(resolver,
                     Settings.System.VIBRATE_IN_CALL, 1) != 0;
@@ -654,6 +661,8 @@ public class NotificationManagerService extends INotificationManager.Stub
                     Settings.System.NOTIFICATION_PACKAGE_COLORS), false, this);
             resolver.registerContentObserver(Settings.System.getUriFor(
                     Settings.System.TRACKBALL_SCREEN_ON), false, this);
+	    resolver.registerContentObserver(Settings.System.getUriFor(
+                    Settings.System.USE_BUTTONS), false, this);
             resolver.registerContentObserver(Settings.System.getUriFor(
                     Settings.System.TRACKBALL_NOTIFICATION_SUCCESSION), false, this);
             resolver.registerContentObserver(Settings.System.getUriFor(
@@ -675,6 +684,8 @@ public class NotificationManagerService extends INotificationManager.Stub
             ContentResolver resolver = mContext.getContentResolver();
             mLedWithScreenOn = Settings.System.getInt(resolver,
                     Settings.System.TRACKBALL_SCREEN_ON, 0) == 1;
+	    mButtonLightEnabled = Settings.System.getInt(resolver,
+		    Settings.System.USE_BUTTONS, 0) == 1;
             mLedBlendColors = Settings.System.getInt(resolver,
                     Settings.System.TRACKBALL_NOTIFICATION_BLEND_COLOR, 0) == 1;
             if (mLedBlendColors) {
@@ -774,6 +785,7 @@ public class NotificationManagerService extends INotificationManager.Stub
         mBatteryLight = lights.getLight(LightsService.LIGHT_ID_BATTERY);
         mNotificationLight = lights.getLight(LightsService.LIGHT_ID_NOTIFICATIONS);
         mAttentionLight = lights.getLight(LightsService.LIGHT_ID_ATTENTION);
+	mButtonLight = lights.getLight(LightsService.LIGHT_ID_BUTTONS);
 
         Resources resources = mContext.getResources();
         mDefaultNotificationColor = resources.getColor(
@@ -1606,8 +1618,9 @@ public class NotificationManagerService extends INotificationManager.Stub
         }
     }
 
-    private void updateRGBLightsLocked() {
-        boolean succession = mLedInSuccession;
+    private void updateRGBLightsLocked() {        
+	boolean succession = mLedInSuccession;
+	final boolean inQuietHours = inQuietHours();
 
         // Battery low always shows, other states only show if charging.
         if (mBatteryLow) {
@@ -1644,6 +1657,9 @@ public class NotificationManagerService extends INotificationManager.Stub
         // and we are not currently in a call
         if (mLedNotification == null || (mScreenOn && !mLedWithScreenOn) || mInCall) {
             mNotificationLight.turnOff();
+	    if(!mScreenOn){ //turn off the button backlight if there is no notification wih LED anymore and the user is not using the phone (= screen off) 
+		mButtonLight.setBrightness(0);
+	    }
             mAlarmManager.cancel(mLedUpdateIntent);
         } else {
             if (succession && lightCount > 0) {
@@ -1687,6 +1703,9 @@ public class NotificationManagerService extends INotificationManager.Stub
                             : LightsService.LIGHT_FLASH_TIMED;
 
                         mNotificationLight.setFlashing(ledARGB, mode, ledOnMS, ledOffMS);
+			if(mButtonLightEnabled && !(mQuietHoursEnabled && mQuietHoursBln && inQuietHours)){
+				mButtonLight.setBrightness(255);
+			}
                     }
                     mAlarmManager.cancel(mLedUpdateIntent);
                 }
@@ -1698,8 +1717,8 @@ public class NotificationManagerService extends INotificationManager.Stub
         }
     }
 
-    private void updateGreenLightLocked() {
-        // handle notification light
+    private void updateGreenLightLocked() {   	
+	// handle notification light
         if (mLedNotification == null) {
             // get next notification, if any
             int n = mLights.size();
@@ -1715,11 +1734,17 @@ public class NotificationManagerService extends INotificationManager.Stub
         if (mLedNotification == null || mInCall || inQuietHours
                 || (mScreenOn && !mNotificationAlwaysOnEnabled)) {
             mNotificationLight.turnOff();
+	    if(!mScreenOn){ //turn off the button backlight if there is no notification wih LED anymore and the user is not using the phone (= screen off) 
+		mButtonLight.setBrightness(0);
+	    }
             mGreenLightOn = false;
         } else {
             if (mNotificationBlinkEnabled) {
                 mNotificationLight.setFlashing(0xFF00FF00,
                         LightsService.LIGHT_FLASH_HARDWARE, 0, 0);
+		if(mButtonLightEnabled && !(mQuietHoursEnabled && mQuietHoursBln)){
+		 mButtonLight.setBrightness(255);
+		}
 
             } else {
                 mNotificationLight.setColor(0xFF00FF00);

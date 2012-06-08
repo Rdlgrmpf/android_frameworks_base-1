@@ -51,6 +51,7 @@ public abstract class PowerButton {
     public static final String BUTTON_MEDIA_PREVIOUS = "toggleMediaPrevious";
     public static final String BUTTON_MEDIA_NEXT = "toggleMediaNext";
     public static final String BUTTON_WIMAX = "toggleWimax";
+    public static final String BUTTON_BLN = "toggleBln";
     public static final String BUTTON_UNKNOWN = "unknown";
 
     private static final Mode MASK_MODE = Mode.SCREEN;
